@@ -314,6 +314,117 @@ tr.clickable:hover {
   background: rgba(255, 255, 255, 0.25);
 }
 
+.section-title {
+  font-size: 15px;
+  margin: 4px 0 14px;
+}
+
+.campaign-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 22px;
+  margin-bottom: 16px;
+}
+
+.campaign-box-title {
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 16px;
+}
+
+.campaign-box-columns {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 24px;
+}
+
+.campaign-box-columns.compare {
+  grid-template-columns: 1fr 1fr;
+}
+
+@media (max-width: 700px) {
+  .campaign-box-columns.compare {
+    grid-template-columns: 1fr;
+  }
+}
+
+.campaign-box-column-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 10px;
+  text-align: center;
+}
+
+.mini-funnel {
+  margin-bottom: 22px;
+}
+
+.mini-funnel:last-child {
+  margin-bottom: 0;
+}
+
+.mini-funnel-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-align: center;
+  margin-bottom: 10px;
+}
+
+.pill-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.pill-label {
+  width: 105px;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pill-track {
+  flex: 1;
+}
+
+.pill {
+  height: 32px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  min-width: 34px;
+  transition: width 0.2s ease;
+}
+
+.pill-main {
+  background: var(--accent);
+}
+
+.pill-lost {
+  background: var(--danger);
+}
+
+.pill-win {
+  background: var(--success);
+}
+
+.pill-gratis {
+  background: #d97706;
+}
+
 .note {
   font-size: 12px;
   color: var(--text-muted);
