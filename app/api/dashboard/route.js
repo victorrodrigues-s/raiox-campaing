@@ -159,41 +159,33 @@ function pipelineCategory(pipelineLabel) {
   return "other";
 }
 
-// Funil de pré-vendas simplificado: MQLs -> SQLs -> Onfly Grátis, com Lost à parte.
-function presalesBucket(stageLabel) {
-  const l = (stageLabel || "").trim().toLowerCase();
-  if (["novos", "mqls", "conexão", "conexao"].includes(l)) return { bucket: "MQLs", order: 1, isClosed: false };
-  if (["sql", "agendamentos"].includes(l)) return { bucket: "SQLs", order: 2, isClosed: false };
-  if (l === "lost") return { bucket: "Lost", order: 4, isClosed: true };
-  return { bucket: `Outro (${stageLabel})`, order: 90, isClosed: false };
-}
-
-// Funil de vendas simplificado: unifica todos os pipes "Closer".
-function salesBucket(stageLabel) {
-  const l = (stageLabel || "").trim().toLowerCase();
-  if (["opportunity", "connection", "prospecting"].includes(l)) return { bucket: "Opportunity", order: 1, isClosed: false };
-  if (l === "demo") return { bucket: "Demo", order: 2, isClosed: false };
-  if (["proposal", "negotiation"].includes(l)) return { bucket: "Proposal", order: 3, isClosed: false };
-  if (["closing", "signature"].includes(l)) return { bucket: "Closing", order: 4, isClosed: false };
-  if (l === "implementation") return { bucket: "Implementation", order: 5, isClosed: false };
-  if (l === "win") return { bucket: "Win", order: 6, isClosed: false };
-  if (l === "lost") return { bucket: "Lost", order: 7, isClosed: true };
-  return { bucket: `Outro (${stageLabel})`, order: 90, isClosed: false };
-}
-
-// Classifica um negócio num dos dois funis simplificados (ou "other" se não pertence a nenhum).
-function classifyFunnel(pipelineLabel, stageLabel) {
+// Funil único simplificado (6 fases), validado com o Victor:
+// 1. Parado em MQL   -> SDR Inbound / BDR Outbound, etapas Novos/MQLs/Conexão (ainda não chegou em SQL)
+// 2. Agendamento     -> SDR Inbound / BDR Outbound, etapas SQL/Agendamentos (ainda não foi para Closer nem perdeu)
+// 3. Lost em Pré-Vendas -> qualquer Lost dentro de SDR Inbound / BDR Outbound
+// 4. Pipe de Closer  -> qualquer etapa (não-Lost) dentro de um pipe "Closer"
+// 5. Lost em Vendas  -> Lost dentro de um pipe "Closer"
+// 6. Foi para o Grátis -> qualquer etapa dentro do pipe Onfly Gratuito
+// Negócios em outros pipelines (Sucesso do Cliente, Integração, Afiliados etc.) caem em "other"
+// e não entram no funil de 6 fases, mas continuam contando no total do período (base do %).
+function classifySimpleBucket(pipelineLabel, stageLabel) {
   const cat = pipelineCategory(pipelineLabel);
+  const l = (stageLabel || "").trim().toLowerCase();
+
   if (cat === "presales-sdrbdr") {
-    return { funnel: "presales", ...presalesBucket(stageLabel) };
+    if (l === "lost") return { bucket: "Lost em Pré-Vendas", order: 3, isOther: false };
+    if (["novos", "mqls", "conexão", "conexao"].includes(l)) return { bucket: "Parado em MQL", order: 1, isOther: false };
+    if (["sql", "agendamentos"].includes(l)) return { bucket: "Agendamento", order: 2, isOther: false };
+    return { bucket: `Outro (${stageLabel})`, order: 90, isOther: true };
   }
   if (cat === "presales-gratis") {
-    return { funnel: "presales", bucket: "Onfly Grátis", order: 3, isClosed: false };
+    return { bucket: "Foi para o Grátis", order: 6, isOther: false };
   }
   if (cat === "sales-closer") {
-    return { funnel: "sales", ...salesBucket(stageLabel) };
+    if (l === "lost") return { bucket: "Lost em Vendas", order: 5, isOther: false };
+    return { bucket: "Pipe de Closer", order: 4, isOther: false };
   }
-  return { funnel: "other", bucket: stageLabel, order: 99, isClosed: false };
+  return { bucket: stageLabel, order: 99, isOther: true };
 }
 
 async function buildDashboard() {
@@ -223,19 +215,22 @@ async function buildDashboard() {
     const pipelineId = p.pipeline;
     const pipelineInfo = pipelines[pipelineId] || { label: pipelineId || "(sem pipeline)", stages: {} };
     const stageInfo = pipelineInfo.stages[p.dealstage] || { label: p.dealstage || "(sem etapa)", order: 999, isClosed: false };
-    const cls = classifyFunnel(pipelineInfo.label, stageInfo.label);
+    const cls = classifySimpleBucket(pipelineInfo.label, stageInfo.label);
 
-    const key = [campaign, channel, month, cls.funnel, cls.bucket].join("|||");
+    // Chave NÃO inclui o bucket "other": todo negócio que não é das 6 fases entra
+    // agrupado só por campanha/canal/mês, para contar no total do período sem
+    // aparecer como uma barra extra no funil.
+    const bucketKey = cls.isOther ? "(outros pipelines)" : cls.bucket;
+    const key = [campaign, channel, month, bucketKey].join("|||");
     if (!rowsMap.has(key)) {
       rowsMap.set(key, {
         campaign,
         channel,
         rawSource,
         month,
-        funnel: cls.funnel,
-        bucket: cls.bucket,
-        bucketOrder: cls.order,
-        isClosed: !!cls.isClosed,
+        bucket: bucketKey,
+        bucketOrder: cls.isOther ? 99 : cls.order,
+        isOther: !!cls.isOther,
         pipeline: pipelineInfo.label,
         stage: stageInfo.label,
         count: 0,

@@ -10,6 +10,16 @@ const CHANNELS = [
   { key: "linkedin", label: "LinkedIn" },
 ];
 
+// As 6 fases do funil único, na ordem em que devem aparecer, com a classe de cor de cada barra.
+const FUNNEL_STAGES = [
+  { bucket: "Parado em MQL", cls: "fill-mql" },
+  { bucket: "Agendamento", cls: "fill-agendamento" },
+  { bucket: "Lost em Pré-Vendas", cls: "fill-lost-pre" },
+  { bucket: "Pipe de Closer", cls: "fill-closer" },
+  { bucket: "Lost em Vendas", cls: "fill-lost-vendas" },
+  { bucket: "Foi para o Grátis", cls: "fill-gratis" },
+];
+
 function formatMonth(key) {
   if (!key || key === "(sem data)") return key;
   const [y, m] = key.split("-");
@@ -32,61 +42,57 @@ function formatDateTime(iso) {
   }
 }
 
+// Agrega as linhas de um recorte (campanha + mês) nas 6 fases fixas do funil,
+// sempre na mesma ordem, mesmo quando alguma fase não tem negócios (count 0).
 function aggregateFunnel(rows) {
-  const map = new Map();
-  for (const r of rows) {
-    const prev = map.get(r.bucket) || { count: 0, order: r.bucketOrder, isClosed: r.isClosed };
-    prev.count += r.count;
-    map.set(r.bucket, prev);
-  }
-  return [...map.entries()]
-    .map(([bucket, v]) => ({ bucket, ...v }))
-    .sort((a, b) => a.order - b.order);
+  const counts = new Map();
+  for (const r of rows) counts.set(r.bucket, (counts.get(r.bucket) || 0) + r.count);
+  return FUNNEL_STAGES.map((s) => ({ bucket: s.bucket, cls: s.cls, count: counts.get(s.bucket) || 0 }));
 }
 
-// Classifica a cor de cada barra do funil: fluxo principal, perdido, ganho ou saída lateral.
-function barKind(funnelType, bucket) {
-  if (bucket === "Lost") return "lost";
-  if (funnelType === "sales" && bucket === "Win") return "win";
-  if (funnelType === "presales" && bucket === "Onfly Grátis") return "gratis";
-  return "main";
-}
-
-function MiniFunnel({ title, funnelType, stages }) {
-  const mainStage = stages.find((s) => barKind(funnelType, s.bucket) === "main") || stages[0];
-  const base = mainStage ? Math.max(1, mainStage.count) : 1;
+function SimpleFunnel({ stages, total }) {
+  const base = Math.max(1, total);
   return (
-    <div className="mini-funnel">
-      <div className="mini-funnel-title">{title}</div>
+    <div className="simple-funnel">
       {stages.map((s) => {
-        const kind = barKind(funnelType, s.bucket);
-        const pct = Math.max(s.count > 0 ? 8 : 4, Math.min(100, (s.count / base) * 100));
+        const pct = base > 0 ? (s.count / base) * 100 : 0;
+        const width = Math.max(s.count > 0 ? 6 : 2, Math.min(100, pct));
         return (
-          <div className="pill-row" key={s.bucket}>
-            <div className="pill-label">{s.bucket}</div>
-            <div className="pill-track">
-              <div className={`pill pill-${kind}`} style={{ width: `${pct}%` }}>
+          <div className="stage-row" key={s.bucket}>
+            <div className="stage-label">{s.bucket}</div>
+            <div className="stage-bar-track">
+              <div className={`stage-bar-fill ${s.cls}`} style={{ width: `${width}%` }}>
                 {s.count > 0 ? s.count : ""}
               </div>
             </div>
+            <div className="stage-pct">{pct.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%</div>
           </div>
         );
       })}
-      {stages.length === 0 && <div className="empty-state">Sem negócios.</div>}
     </div>
   );
 }
 
-function CampaignBox({ name, columns }) {
+function CampaignBox({ name, total, columns }) {
+  const isCompare = columns.length > 1;
   return (
     <div className="campaign-box">
       <div className="campaign-box-title">{name}</div>
-      <div className={`campaign-box-columns ${columns.length > 1 ? "compare" : ""}`}>
+      {!isCompare && (
+        <div className="campaign-box-total">
+          {total.toLocaleString("pt-BR")} negócio(s) com True Data MQL no período
+        </div>
+      )}
+      <div className={`campaign-box-columns ${isCompare ? "compare" : ""}`}>
         {columns.map((col) => (
           <div className="campaign-box-column" key={col.key}>
             {col.label && <div className="campaign-box-column-label">{col.label}</div>}
-            <MiniFunnel title="Pré-Vendas" funnelType="presales" stages={col.presales} />
-            <MiniFunnel title="Vendas" funnelType="sales" stages={col.sales} />
+            {isCompare && (
+              <div className="campaign-box-total" style={{ textAlign: "center" }}>
+                {col.total.toLocaleString("pt-BR")} negócio(s)
+              </div>
+            )}
+            <SimpleFunnel stages={col.stages} total={col.total} />
           </div>
         ))}
       </div>
@@ -169,7 +175,7 @@ export default function Page() {
     return rows.filter((r) => month === "__all__" || r.month === month);
   }, [rows, compareMode, month, monthA, monthB]);
 
-  const otherTotal = scopedRows.filter((r) => r.funnel === "other").reduce((s, r) => s + r.count, 0);
+  const otherTotal = scopedRows.filter((r) => r.isOther).reduce((s, r) => s + r.count, 0);
 
   return (
     <div className="page">
@@ -284,34 +290,39 @@ export default function Page() {
             )}
           </div>
 
+          <div className="legend">
+            {FUNNEL_STAGES.map((s) => (
+              <div className="legend-item" key={s.bucket}>
+                <span className={`dot ${s.cls}`} />
+                {s.bucket}
+              </div>
+            ))}
+          </div>
+
           <h2 className="section-title">Campanhas</h2>
 
-          {campaignNames.map((name) => {
-            const columns = compareMode
-              ? [
-                  {
-                    key: "A",
-                    label: formatMonth(monthA),
-                    presales: aggregateFunnel(rowsForCampaignMonth(name, monthA).filter((r) => r.funnel === "presales")),
-                    sales: aggregateFunnel(rowsForCampaignMonth(name, monthA).filter((r) => r.funnel === "sales")),
-                  },
-                  {
-                    key: "B",
-                    label: formatMonth(monthB),
-                    presales: aggregateFunnel(rowsForCampaignMonth(name, monthB).filter((r) => r.funnel === "presales")),
-                    sales: aggregateFunnel(rowsForCampaignMonth(name, monthB).filter((r) => r.funnel === "sales")),
-                  },
-                ]
-              : [
-                  {
-                    key: "single",
-                    label: null,
-                    presales: aggregateFunnel(rowsForCampaignMonth(name, month).filter((r) => r.funnel === "presales")),
-                    sales: aggregateFunnel(rowsForCampaignMonth(name, month).filter((r) => r.funnel === "sales")),
-                  },
-                ];
-            return <CampaignBox key={name} name={name} columns={columns} />;
-          })}
+          <div className="campaign-grid">
+            {campaignNames.map((name) => {
+              // Base do % = TODOS os negócios com True Data MQL no recorte (campanha + mês),
+              // incluindo os que caem em outros pipelines — não só os das 6 fases do funil.
+              function buildColumn(key, label, m) {
+                const rowsHere = rowsForCampaignMonth(name, m);
+                return {
+                  key,
+                  label,
+                  total: rowsHere.reduce((s, r) => s + r.count, 0),
+                  stages: aggregateFunnel(rowsHere.filter((r) => !r.isOther)),
+                };
+              }
+
+              const columns = compareMode
+                ? [buildColumn("A", formatMonth(monthA), monthA), buildColumn("B", formatMonth(monthB), monthB)]
+                : [buildColumn("single", null, month)];
+
+              const total = columns.reduce((s, c) => s + c.total, 0);
+              return <CampaignBox key={name} name={name} total={total} columns={columns} />;
+            })}
+          </div>
 
           {campaignNames.length === 0 && (
             <div className="empty-state">Nenhum negócio encontrado para este canal/mês.</div>
