@@ -94,8 +94,8 @@ async function fetchPrimaryContactIds(dealIds) {
   return map;
 }
 
-// 3) Campanha de primeiro clique de cada contato
-async function fetchContactCampaigns(contactIds) {
+// 3) Campanha e fonte de primeiro clique de cada contato
+async function fetchContactAttrs(contactIds) {
   const map = {};
   const unique = [...new Set(contactIds)];
   const batches = [];
@@ -105,13 +105,18 @@ async function fetchContactCampaigns(contactIds) {
     const data = await hsFetch("/crm/v3/objects/contacts/batch/read", {
       method: "POST",
       body: JSON.stringify({
-        properties: ["first_click_utm_campaing"],
+        properties: ["first_click_utm_campaing", "first_click_utm_source"],
         inputs: batch.map((id) => ({ id: String(id) })),
       }),
     });
     for (const r of data.results || []) {
-      const v = r.properties && r.properties.first_click_utm_campaing;
-      map[r.id] = v && v.trim() ? v.trim() : "(sem campanha)";
+      const props = r.properties || {};
+      const campaign = props.first_click_utm_campaing;
+      const source = props.first_click_utm_source;
+      map[r.id] = {
+        campaign: campaign && campaign.trim() ? campaign.trim() : "(sem campanha)",
+        source: source && source.trim() ? source.trim().toLowerCase() : "(sem source)",
+      };
     }
   });
   return map;
@@ -145,25 +150,28 @@ async function buildDashboard() {
   ]);
 
   const contactIds = Object.values(contactIdByDeal);
-  const campaignByContact = await fetchContactCampaigns(contactIds);
+  const attrsByContact = await fetchContactAttrs(contactIds);
 
-  // Linhas agregadas: campanha x mês x pipeline x etapa -> contagem
+  // Linhas agregadas: campanha x fonte x mês x pipeline x etapa -> contagem
   const rowsMap = new Map();
 
   for (const d of deals) {
     const p = d.properties || {};
     const contactId = contactIdByDeal[d.id];
-    const campaign = contactId ? campaignByContact[contactId] || "(sem campanha)" : "(sem contato associado)";
+    const attrs = contactId ? attrsByContact[contactId] : null;
+    const campaign = attrs ? attrs.campaign : "(sem contato associado)";
+    const source = attrs ? attrs.source : "(sem contato associado)";
     const trueDataMql = p.true_data_mql; // "YYYY-MM-DD"
     const month = trueDataMql ? trueDataMql.slice(0, 7) : "(sem data)";
     const pipelineId = p.pipeline;
     const pipelineInfo = pipelines[pipelineId] || { label: pipelineId || "(sem pipeline)", stages: {} };
     const stageInfo = pipelineInfo.stages[p.dealstage] || { label: p.dealstage || "(sem etapa)", order: 999, isClosed: false };
 
-    const key = [campaign, month, pipelineInfo.label, stageInfo.label].join("|||");
+    const key = [campaign, source, month, pipelineInfo.label, stageInfo.label].join("|||");
     if (!rowsMap.has(key)) {
       rowsMap.set(key, {
         campaign,
+        source,
         month,
         pipeline: pipelineInfo.label,
         stage: stageInfo.label,

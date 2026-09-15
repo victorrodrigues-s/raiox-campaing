@@ -33,6 +33,8 @@ export default function Page() {
   const [error, setError] = useState(null);
   const [campaign, setCampaign] = useState("__all__");
   const [month, setMonth] = useState("__all__");
+  const [source, setSource] = useState("google");
+  const [sourceInitialized, setSourceInitialized] = useState(false);
 
   async function load(refresh) {
     try {
@@ -55,7 +57,29 @@ export default function Page() {
     load(false);
   }, []);
 
-  const rows = data && data.rows ? data.rows : [];
+  const allRows = data && data.rows ? data.rows : [];
+
+  const sourceOptions = useMemo(() => {
+    const map = new Map();
+    for (const r of allRows) map.set(r.source, (map.get(r.source) || 0) + r.count);
+    return [...map.entries()]
+      .map(([name, total]) => ({ name, total }))
+      .sort((a, b) => b.total - a.total);
+  }, [allRows]);
+
+  // Assim que os dados chegam, tenta deixar "google" pré-selecionado; se não existir, mostra tudo.
+  useEffect(() => {
+    if (!sourceInitialized && data) {
+      const hasGoogle = sourceOptions.some((s) => s.name === "google");
+      setSource(hasGoogle ? "google" : "__all__");
+      setSourceInitialized(true);
+    }
+  }, [data, sourceOptions, sourceInitialized]);
+
+  const rows = useMemo(() => {
+    if (source === "__all__") return allRows;
+    return allRows.filter((r) => r.source === source);
+  }, [allRows, source]);
 
   const campaignTotals = useMemo(() => {
     const map = new Map();
@@ -72,7 +96,7 @@ export default function Page() {
     return [...set].sort();
   }, [rows]);
 
-  const totalDealsAll = data ? data.totalDeals : 0;
+  const totalDealsFiltered = rows.reduce((s, r) => s + r.count, 0);
 
   const filteredRows = useMemo(() => {
     return rows.filter(
@@ -151,8 +175,11 @@ export default function Page() {
         <>
           <div className="kpis">
             <div className="kpi">
-              <div className="value">{totalDealsAll.toLocaleString("pt-BR")}</div>
-              <div className="label">Total de negócios (True Data MQL)</div>
+              <div className="value">{totalDealsFiltered.toLocaleString("pt-BR")}</div>
+              <div className="label">
+                Negócios (True Data MQL)
+                {source !== "__all__" ? <span className="badge">source: {source}</span> : null}
+              </div>
             </div>
             <div className="kpi">
               <div className="value">{campaignTotals.length}</div>
@@ -174,6 +201,24 @@ export default function Page() {
           </div>
 
           <div className="filters">
+            <div className="field">
+              <label>Fonte (first_click_utm_source)</label>
+              <select
+                value={source}
+                onChange={(e) => {
+                  setSource(e.target.value);
+                  setCampaign("__all__");
+                  setMonth("__all__");
+                }}
+              >
+                <option value="__all__">Todas as fontes</option>
+                {sourceOptions.map((s) => (
+                  <option key={s.name} value={s.name}>
+                    {s.name} ({s.total})
+                  </option>
+                ))}
+              </select>
+            </div>
             <div className="field">
               <label>Campanha</label>
               <select value={campaign} onChange={(e) => setCampaign(e.target.value)}>
@@ -222,7 +267,7 @@ export default function Page() {
                       <td>{c.name}</td>
                       <td style={{ textAlign: "right" }}>{c.total}</td>
                       <td style={{ textAlign: "right" }}>
-                        {totalDealsAll ? ((c.total / totalDealsAll) * 100).toFixed(1) : "0.0"}%
+                        {totalDealsFiltered ? ((c.total / totalDealsFiltered) * 100).toFixed(1) : "0.0"}%
                       </td>
                     </tr>
                   ))}
