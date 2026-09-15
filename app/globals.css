@@ -271,6 +271,55 @@ tr.clickable:hover {
   font-size: 14px;
 }
 
+.channel-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.channel-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.channel-tab:hover {
+  border-color: var(--accent);
+}
+
+.channel-tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.channel-tab-count {
+  font-size: 11px;
+  opacity: 0.8;
+  background: rgba(0, 0, 0, 0.08);
+  padding: 1px 7px;
+  border-radius: 999px;
+}
+
+.channel-tab.active .channel-tab-count {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.note {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 12px 2px 0;
+}
+
 .badge {
   display: inline-block;
   font-size: 11px;

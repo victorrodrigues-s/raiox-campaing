@@ -4,6 +4,12 @@ import { useEffect, useMemo, useState } from "react";
 
 const MONTH_FMT = new Intl.DateTimeFormat("pt-BR", { month: "short", year: "2-digit" });
 
+const CHANNELS = [
+  { key: "google", label: "Google" },
+  { key: "facebook", label: "Facebook" },
+  { key: "linkedin", label: "LinkedIn" },
+];
+
 function formatMonth(key) {
   if (!key || key === "(sem data)") return key;
   const [y, m] = key.split("-");
@@ -26,15 +32,54 @@ function formatDateTime(iso) {
   }
 }
 
+function aggregateFunnel(rows) {
+  const map = new Map();
+  for (const r of rows) {
+    const prev = map.get(r.bucket) || { count: 0, order: r.bucketOrder, isClosed: r.isClosed };
+    prev.count += r.count;
+    map.set(r.bucket, prev);
+  }
+  return [...map.entries()]
+    .map(([bucket, v]) => ({ bucket, ...v }))
+    .sort((a, b) => a.order - b.order);
+}
+
+function FunnelCard({ title, stages, total }) {
+  const first = stages.find((s) => !s.isClosed) || stages[0];
+  const base = first ? Math.max(1, first.count) : 1;
+  return (
+    <div className="card" style={{ marginTop: 16 }}>
+      <h2>
+        {title}
+        <span className="sub">{total.toLocaleString("pt-BR")} negócios</span>
+      </h2>
+      {stages.map((s) => (
+        <div className="bar-row" key={s.bucket}>
+          <div className="bar-label">{s.bucket}</div>
+          <div className="bar-track">
+            <div
+              className={`bar-fill ${s.isClosed ? "closed" : ""}`}
+              style={{ width: `${Math.min(100, (s.count / base) * 100)}%` }}
+            />
+          </div>
+          <div className="bar-value">
+            {s.count} ({total ? ((s.count / total) * 100).toFixed(0) : "0"}%)
+          </div>
+        </div>
+      ))}
+      {stages.length === 0 && <div className="empty-state">Nenhum negócio para este filtro.</div>}
+    </div>
+  );
+}
+
 export default function Page() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
+  const [channel, setChannel] = useState("google");
   const [campaign, setCampaign] = useState("__all__");
   const [month, setMonth] = useState("__all__");
-  const [source, setSource] = useState("google");
-  const [sourceInitialized, setSourceInitialized] = useState(false);
 
   async function load(refresh) {
     try {
@@ -59,33 +104,17 @@ export default function Page() {
 
   const allRows = data && data.rows ? data.rows : [];
 
-  const sourceOptions = useMemo(() => {
+  const channelTotals = useMemo(() => {
     const map = new Map();
-    for (const r of allRows) map.set(r.source, (map.get(r.source) || 0) + r.count);
-    return [...map.entries()]
-      .map(([name, total]) => ({ name, total }))
-      .sort((a, b) => b.total - a.total);
+    for (const r of allRows) map.set(r.channel, (map.get(r.channel) || 0) + r.count);
+    return map;
   }, [allRows]);
 
-  // Assim que os dados chegam, tenta deixar "google" pré-selecionado; se não existir, mostra tudo.
-  useEffect(() => {
-    if (!sourceInitialized && data) {
-      const hasGoogle = sourceOptions.some((s) => s.name === "google");
-      setSource(hasGoogle ? "google" : "__all__");
-      setSourceInitialized(true);
-    }
-  }, [data, sourceOptions, sourceInitialized]);
-
-  const rows = useMemo(() => {
-    if (source === "__all__") return allRows;
-    return allRows.filter((r) => r.source === source);
-  }, [allRows, source]);
+  const rows = useMemo(() => allRows.filter((r) => r.channel === channel), [allRows, channel]);
 
   const campaignTotals = useMemo(() => {
     const map = new Map();
-    for (const r of rows) {
-      map.set(r.campaign, (map.get(r.campaign) || 0) + r.count);
-    }
+    for (const r of rows) map.set(r.campaign, (map.get(r.campaign) || 0) + r.count);
     return [...map.entries()]
       .map(([name, total]) => ({ name, total }))
       .sort((a, b) => b.total - a.total);
@@ -96,7 +125,18 @@ export default function Page() {
     return [...set].sort();
   }, [rows]);
 
-  const totalDealsFiltered = rows.reduce((s, r) => s + r.count, 0);
+  const totalDealsChannel = rows.reduce((s, r) => s + r.count, 0);
+
+  // Reseta campanha/mês quando o canal muda, se o valor selecionado deixou de existir.
+  useEffect(() => {
+    if (campaign !== "__all__" && !campaignTotals.some((c) => c.name === campaign)) {
+      setCampaign("__all__");
+    }
+    if (month !== "__all__" && !months.includes(month)) {
+      setMonth("__all__");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channel]);
 
   const filteredRows = useMemo(() => {
     return rows.filter(
@@ -117,26 +157,13 @@ export default function Page() {
 
   const maxMonthly = Math.max(1, ...monthlySeriesForCampaign.map((m) => m.count));
 
-  const pipelineFunnels = useMemo(() => {
-    const byPipeline = new Map();
-    for (const r of filteredRows) {
-      if (!byPipeline.has(r.pipeline)) byPipeline.set(r.pipeline, new Map());
-      const stageMap = byPipeline.get(r.pipeline);
-      const key = r.stage;
-      const prev = stageMap.get(key) || { count: 0, order: r.stageOrder, isClosed: r.isClosed };
-      prev.count += r.count;
-      stageMap.set(key, prev);
-    }
-    const out = [];
-    for (const [pipeline, stageMap] of byPipeline.entries()) {
-      const stages = [...stageMap.entries()]
-        .map(([stage, v]) => ({ stage, ...v }))
-        .sort((a, b) => a.order - b.order);
-      const total = stages.reduce((s, st) => s + st.count, 0);
-      out.push({ pipeline, stages, total });
-    }
-    return out.sort((a, b) => b.total - a.total);
-  }, [filteredRows]);
+  const presalesRows = filteredRows.filter((r) => r.funnel === "presales");
+  const salesRows = filteredRows.filter((r) => r.funnel === "sales");
+  const otherRows = filteredRows.filter((r) => r.funnel === "other");
+
+  const presalesStages = aggregateFunnel(presalesRows);
+  const salesStages = aggregateFunnel(salesRows);
+  const otherTotal = otherRows.reduce((s, r) => s + r.count, 0);
 
   return (
     <div className="page">
@@ -145,7 +172,8 @@ export default function Page() {
           <h1>Raio-X de Campanhas</h1>
           <p>
             Negócios com <strong>True Data MQL</strong> preenchido, atribuídos por{" "}
-            <strong>first_click_utm_campaing</strong> do contato.
+            <strong>first_click_utm_campaing</strong> · canal por{" "}
+            <strong>first_click_utm_source</strong>.
           </p>
         </div>
         <div className="meta">
@@ -173,13 +201,23 @@ export default function Page() {
 
       {!loading && !error && data && (
         <>
+          <div className="channel-tabs">
+            {CHANNELS.map((c) => (
+              <button
+                key={c.key}
+                className={`channel-tab ${channel === c.key ? "active" : ""}`}
+                onClick={() => setChannel(c.key)}
+              >
+                {c.label}
+                <span className="channel-tab-count">{(channelTotals.get(c.key) || 0).toLocaleString("pt-BR")}</span>
+              </button>
+            ))}
+          </div>
+
           <div className="kpis">
             <div className="kpi">
-              <div className="value">{totalDealsFiltered.toLocaleString("pt-BR")}</div>
-              <div className="label">
-                Negócios (True Data MQL)
-                {source !== "__all__" ? <span className="badge">source: {source}</span> : null}
-              </div>
+              <div className="value">{totalDealsChannel.toLocaleString("pt-BR")}</div>
+              <div className="label">Negócios em {CHANNELS.find((c) => c.key === channel)?.label}</div>
             </div>
             <div className="kpi">
               <div className="value">{campaignTotals.length}</div>
@@ -202,24 +240,6 @@ export default function Page() {
 
           <div className="filters">
             <div className="field">
-              <label>Fonte (first_click_utm_source)</label>
-              <select
-                value={source}
-                onChange={(e) => {
-                  setSource(e.target.value);
-                  setCampaign("__all__");
-                  setMonth("__all__");
-                }}
-              >
-                <option value="__all__">Todas as fontes</option>
-                {sourceOptions.map((s) => (
-                  <option key={s.name} value={s.name}>
-                    {s.name} ({s.total})
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="field">
               <label>Campanha</label>
               <select value={campaign} onChange={(e) => setCampaign(e.target.value)}>
                 <option value="__all__">Todas as campanhas</option>
@@ -231,7 +251,7 @@ export default function Page() {
               </select>
             </div>
             <div className="field">
-              <label>Mês (True Data MQL)</label>
+              <label>Mês (True Data MQL) · cohort</label>
               <select value={month} onChange={(e) => setMonth(e.target.value)}>
                 <option value="__all__">Todos os meses</option>
                 {months.map((m) => (
@@ -267,14 +287,14 @@ export default function Page() {
                       <td>{c.name}</td>
                       <td style={{ textAlign: "right" }}>{c.total}</td>
                       <td style={{ textAlign: "right" }}>
-                        {totalDealsFiltered ? ((c.total / totalDealsFiltered) * 100).toFixed(1) : "0.0"}%
+                        {totalDealsChannel ? ((c.total / totalDealsChannel) * 100).toFixed(1) : "0.0"}%
                       </td>
                     </tr>
                   ))}
                   {campaignTotals.length === 0 && (
                     <tr>
                       <td colSpan={3} className="empty-state">
-                        Nenhum negócio encontrado.
+                        Nenhum negócio encontrado para este canal.
                       </td>
                     </tr>
                   )}
@@ -284,7 +304,7 @@ export default function Page() {
 
             <div className="card">
               <h2>
-                Evolução mensal
+                Cohorts mensais
                 <span className="sub">
                   {campaign === "__all__" ? "Todas as campanhas" : campaign}
                 </span>
@@ -307,44 +327,17 @@ export default function Page() {
             </div>
           </div>
 
-          <div className="card" style={{ marginTop: 16 }}>
-            <h2>
-              Funil de etapas do negócio
-              <span className="sub">
-                {campaign === "__all__" ? "Todas as campanhas" : campaign} ·{" "}
-                {month === "__all__" ? "Todos os meses" : formatMonth(month)} · foto da etapa
-                atual de cada negócio
-              </span>
-            </h2>
-            {pipelineFunnels.map((pf) => {
-              const first = pf.stages[0];
-              const base = first ? Math.max(1, first.count) : 1;
-              return (
-                <div className="pipeline-block" key={pf.pipeline}>
-                  <div className="pipeline-title">
-                    {pf.pipeline} <span className="badge">{pf.total} negócios</span>
-                  </div>
-                  {pf.stages.map((s) => (
-                    <div className="bar-row" key={s.stage}>
-                      <div className="bar-label">{s.stage}</div>
-                      <div className="bar-track">
-                        <div
-                          className={`bar-fill ${s.isClosed ? "closed" : ""}`}
-                          style={{ width: `${(s.count / base) * 100}%` }}
-                        />
-                      </div>
-                      <div className="bar-value">
-                        {s.count} ({((s.count / (pf.total || 1)) * 100).toFixed(0)}%)
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              );
-            })}
-            {pipelineFunnels.length === 0 && (
-              <div className="empty-state">Nenhum negócio para este filtro.</div>
-            )}
+          <div className="grid">
+            <FunnelCard title="Funil Pré-vendas" stages={presalesStages} total={presalesRows.reduce((s, r) => s + r.count, 0)} />
+            <FunnelCard title="Funil Vendas (Closer)" stages={salesStages} total={salesRows.reduce((s, r) => s + r.count, 0)} />
           </div>
+
+          {otherTotal > 0 && (
+            <p className="note">
+              {otherTotal.toLocaleString("pt-BR")} negócio(s) deste filtro estão em outros pipelines
+              (Sucesso do Cliente, Integração, Afiliados etc.) e não entram nos funis acima.
+            </p>
+          )}
         </>
       )}
     </div>

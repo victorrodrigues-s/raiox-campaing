@@ -140,6 +140,62 @@ async function fetchPipelines() {
   return map;
 }
 
+// Canais suportados: os demais valores de first_click_utm_source caem em "outro"
+// e não aparecem como opção selecionável no dashboard.
+function mapChannel(rawSource) {
+  const s = (rawSource || "").toLowerCase();
+  if (s.includes("google") || s.includes("adwords")) return "google";
+  if (s.includes("facebook") || s.includes("fb") || s.includes("meta")) return "facebook";
+  if (s.includes("linkedin")) return "linkedin";
+  return "outro";
+}
+
+// Categoria do pipeline para fins de funil (pré-vendas / vendas / outro).
+function pipelineCategory(pipelineLabel) {
+  const l = (pipelineLabel || "").toLowerCase();
+  if (l.includes("sdr inbound") || l.includes("bdr outbound")) return "presales-sdrbdr";
+  if (l.includes("onfly gratuito") || l.includes("onfly grátis") || l.includes("onfly gratis")) return "presales-gratis";
+  if (l.includes("closer")) return "sales-closer";
+  return "other";
+}
+
+// Funil de pré-vendas simplificado: MQLs -> SQLs -> Onfly Grátis, com Lost à parte.
+function presalesBucket(stageLabel) {
+  const l = (stageLabel || "").trim().toLowerCase();
+  if (["novos", "mqls", "conexão", "conexao"].includes(l)) return { bucket: "MQLs", order: 1, isClosed: false };
+  if (["sql", "agendamentos"].includes(l)) return { bucket: "SQLs", order: 2, isClosed: false };
+  if (l === "lost") return { bucket: "Lost", order: 4, isClosed: true };
+  return { bucket: `Outro (${stageLabel})`, order: 90, isClosed: false };
+}
+
+// Funil de vendas simplificado: unifica todos os pipes "Closer".
+function salesBucket(stageLabel) {
+  const l = (stageLabel || "").trim().toLowerCase();
+  if (["opportunity", "connection", "prospecting"].includes(l)) return { bucket: "Opportunity", order: 1, isClosed: false };
+  if (l === "demo") return { bucket: "Demo", order: 2, isClosed: false };
+  if (["proposal", "negotiation"].includes(l)) return { bucket: "Proposal", order: 3, isClosed: false };
+  if (["closing", "signature"].includes(l)) return { bucket: "Closing", order: 4, isClosed: false };
+  if (l === "implementation") return { bucket: "Implementation", order: 5, isClosed: false };
+  if (l === "win") return { bucket: "Win", order: 6, isClosed: false };
+  if (l === "lost") return { bucket: "Lost", order: 7, isClosed: true };
+  return { bucket: `Outro (${stageLabel})`, order: 90, isClosed: false };
+}
+
+// Classifica um negócio num dos dois funis simplificados (ou "other" se não pertence a nenhum).
+function classifyFunnel(pipelineLabel, stageLabel) {
+  const cat = pipelineCategory(pipelineLabel);
+  if (cat === "presales-sdrbdr") {
+    return { funnel: "presales", ...presalesBucket(stageLabel) };
+  }
+  if (cat === "presales-gratis") {
+    return { funnel: "presales", bucket: "Onfly Grátis", order: 3, isClosed: false };
+  }
+  if (cat === "sales-closer") {
+    return { funnel: "sales", ...salesBucket(stageLabel) };
+  }
+  return { funnel: "other", bucket: stageLabel, order: 99, isClosed: false };
+}
+
 async function buildDashboard() {
   const deals = await fetchAllDeals();
   const dealIds = deals.map((d) => d.id);
@@ -152,7 +208,7 @@ async function buildDashboard() {
   const contactIds = Object.values(contactIdByDeal);
   const attrsByContact = await fetchContactAttrs(contactIds);
 
-  // Linhas agregadas: campanha x fonte x mês x pipeline x etapa -> contagem
+  // Linhas agregadas: campanha x canal x mês x funil x bucket -> contagem
   const rowsMap = new Map();
 
   for (const d of deals) {
@@ -160,23 +216,28 @@ async function buildDashboard() {
     const contactId = contactIdByDeal[d.id];
     const attrs = contactId ? attrsByContact[contactId] : null;
     const campaign = attrs ? attrs.campaign : "(sem contato associado)";
-    const source = attrs ? attrs.source : "(sem contato associado)";
+    const rawSource = attrs ? attrs.source : "(sem contato associado)";
+    const channel = mapChannel(rawSource);
     const trueDataMql = p.true_data_mql; // "YYYY-MM-DD"
     const month = trueDataMql ? trueDataMql.slice(0, 7) : "(sem data)";
     const pipelineId = p.pipeline;
     const pipelineInfo = pipelines[pipelineId] || { label: pipelineId || "(sem pipeline)", stages: {} };
     const stageInfo = pipelineInfo.stages[p.dealstage] || { label: p.dealstage || "(sem etapa)", order: 999, isClosed: false };
+    const cls = classifyFunnel(pipelineInfo.label, stageInfo.label);
 
-    const key = [campaign, source, month, pipelineInfo.label, stageInfo.label].join("|||");
+    const key = [campaign, channel, month, cls.funnel, cls.bucket].join("|||");
     if (!rowsMap.has(key)) {
       rowsMap.set(key, {
         campaign,
-        source,
+        channel,
+        rawSource,
         month,
+        funnel: cls.funnel,
+        bucket: cls.bucket,
+        bucketOrder: cls.order,
+        isClosed: !!cls.isClosed,
         pipeline: pipelineInfo.label,
         stage: stageInfo.label,
-        stageOrder: stageInfo.order,
-        isClosed: !!stageInfo.isClosed,
         count: 0,
       });
     }
